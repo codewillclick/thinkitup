@@ -16,25 +16,45 @@ def process(src,imported=None,macros=None,show=False,importing=False,noplot=Fals
 	macros = macros or {}
 	show_macros = show
 	it = iter(src)
-	# Regex declarations ahead of time.
-	# Importing.
-	x_import = re.compile(r'^\s*@import(?P<flag>\S+)?\s+(?P<files>\S+\s*(,\s*\S+\s*)*)$')
-	# Macros.
-	x_macro      = re.compile(r'^\s*@(?P<name>\w+)\(\s*(?P<params>\w+\s*(,\s*\w+\s*)*)\)\s*{\s*$')
-	x_macro_call = re.compile(r'^\s*@(?P<name>\w+)\(\s*(?P<params>\S+\s*(,\s*\S+\s*)*)\)\s*;?\s*$')
-	x_macro_end  = re.compile(r'^\s*}\s*(#.*)?$')
-	# Comment block.
-	x_if = re.compile(r'^\s*@if(?P<flag>\S+)?\s+(?P<val>0|1|true|false|(no)?import)\s*$')
-	x_endif = re.compile(r'^\s*@@\s*$')
-	# Line replacements.
-	x_plot = re.compile(r'^(\s*)plot(\s+)')
-	x_input = re.compile(r'^(\s*)input(\s+)')
+	if 'Regex declarations':
+		# Importing.
+		x_import = re.compile(r'^\s*@import(?P<flag>\S+)?\s+(?P<files>\S+\s*(,\s*\S+\s*)*)$')
+		# Macros.
+		x_macro      = re.compile(r'^\s*@(?P<name>\w+)\(\s*(?P<params>\w+\s*(,\s*\w+\s*)*)\)\s*{\s*$')
+		x_macro_call = re.compile(r'^\s*@(?P<name>\w+)\(\s*(?P<params>\S+\s*(,\s*\S+\s*)*)\)\s*;?\s*$')
+		x_macro_end  = re.compile(r'^\s*}\s*(#.*)?$')
+		# Comment block.
+		x_if = re.compile(r'^\s*@if(?P<flag>\S+)?\s+(?P<val>0|1|true|false|(no)?import)\s*$')
+		x_endif = re.compile(r'^\s*@@\s*$')
+		# Main method input output... how silly.
+		x_main = re.compile(r'^\s*@main(\s+(?P<func>\S+))?\s*$')
+		x_endmain = re.compile(r'^\s*@endmain\s*$')
+		# Line replacements.
+		x_plot = re.compile(r'^(\s*)plot(\s+)')
+		x_input = re.compile(r'^(\s*)input(\s+)')
+		# Keep track of script starts.
+		x_script = re.compile(r'^\s*script\s+(?P<name>\S+)\s*{\s*(#.*)?$')
+	if 'Post-loop actions':
+		# NOTE: These shouldn't be recursive, so they don't need to drop into imports
+		latest_script = None
+		main_block = []
+		main_block_name = None
+		main_block_active = False
 	try:
 		while True:
 			line = next(it)
+			if main_block_active:
+				if x_endmain.search(line):
+					main_block_active = False
+					continue
+				main_block.append(line)
+			
 			# if @import, run process() against target file
 			m = x_import.search(line)
 			if m:
+				# Don't import inside a main block.
+				if main_block_active:
+					raise 'some kind of fuss'
 				fr = [s.strip() for s in m.group('files').split(',')]
 				flag = m.group('flag') or ''
 				# ^ flags...
@@ -124,6 +144,22 @@ def process(src,imported=None,macros=None,show=False,importing=False,noplot=Fals
 			if x_endif.search(line):
 				continue
 			
+			# if a script start, then jot it down.
+			m = x_script.search(line)
+			if m:
+				latest_script = m.group('name')
+			
+			# if main, take the main block and dump out at the end of the file if not importing
+			m = x_main.search(line)
+			if m:
+				main_block_active = True
+				# Assign script/function for main block to call, or set it to script name.
+				mname = m.group('func')
+				if mname:
+					main_block_name = mname
+				main_block_name = main_block_name or latest_script
+				continue
+
 			# TODO: Replacing the last plot in a script {} is a no-no.
 			# otherwise just yield the line
 			if noplot and re.search(x_plot,line):
@@ -133,6 +169,19 @@ def process(src,imported=None,macros=None,show=False,importing=False,noplot=Fals
 			yield line
 	except StopIteration:
 		pass
+	if main_block and main_block_name and not importing:
+		yield ''
+		innames = []
+		for s in main_block:
+			# collect inputs...
+			m = re.search(r'^\s*input\s+(\S+)\s*=.*$',s)
+			if m and m.group(1):
+				innames.append(m.group(1))
+			yield re.sub(r'^\s*','',s)
+		#varname = re.sub(r'.*(\\|/)(?P<name>[^\\/]+)(\..*)?$',r'\g<name>',__name__)
+		varname = main_block_name
+		params = ','.join(innames)
+		yield f'\nplot z_{varname} = {main_block_name}({params});'
 
 if __name__ == '__main__':
 	for s  in process(fiter(sys.stdin)):
