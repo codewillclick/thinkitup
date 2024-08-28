@@ -4,9 +4,10 @@
 		{
 			"type":"PowerShell",
 			"request":"launch",
-			"name":"some dang thurng",
+			"name":"thinkitup",
 			"script":"type ${file} | python thinkit.py | clip",
 			"cwd":"${workspaceFolder}"
 		}
-	]
+	],
+	"description":"push current working file through thinkit.py and copy to clipboard"
 }
