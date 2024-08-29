@@ -9,6 +9,13 @@ def fiter(f):
 	for s in f:
 		yield re.sub(r'\r?\n$','',s)
 
+def find_import_file(f):
+	for d,dnames,fnames in os.walk('.',followlinks=True):
+		for name in fnames:
+			shortname = re.sub(r'\.ts$','',name)
+			if shortname == f:
+				return os.path.join(d,name)
+
 # Match the line, first, then insert an iteration if needed before moving on.
 
 def process(src,imported=None,macros=None,show=False,importing=False,noplot=False,noinput=False):
@@ -48,7 +55,7 @@ def process(src,imported=None,macros=None,show=False,importing=False,noplot=Fals
 					main_block_active = False
 					continue
 				main_block.append(line)
-			
+
 			# if @import, run process() against target file
 			m = x_import.search(line)
 			if m:
@@ -63,7 +70,8 @@ def process(src,imported=None,macros=None,show=False,importing=False,noplot=Fals
 					if fname in imported:
 						continue
 					try:
-						with open(f'{fname}.ts','r') as f:
+						fpath = find_import_file(fname)
+						with open(f'{fpath}','r') as f:
 							no_plots  = True if '?' in flag else False # '?', leave the plots be
 							no_inputs = True if '!' in flag else False # '!', leave inputs be
 							for s in process(fiter(f),imported,macros,show,
