@@ -9,10 +9,15 @@ import http.server
 import socketserver
 import time
 
-class SchwabAuth:
-    AUTH_URL = "https://api.schwab.com/oauth/authorize"
-    TOKEN_URL = "https://api.schwab.com/oauth/token"
-    API_BASE_URL = "https://api.schwab.com"
+class OAuth2Base:
+    """
+    Abstract base class for OAuth2 authentication flows.
+    Handles common OAuth2 steps: PKCE generation, token exchange, refresh, and API calls.
+    """
+
+    AUTH_URL = None
+    TOKEN_URL = None
+    API_BASE_URL = None
 
     def __init__(self, client_id, client_secret, redirect_uri, scopes):
         self.client_id = client_id
@@ -33,6 +38,10 @@ class SchwabAuth:
         return code_challenge
 
     def start_auth_flow(self):
+        """
+        Starts the OAuth2 authorization flow.
+        Opens the browser to the authorization URL and waits for the authorization code.
+        """
         code_challenge = self.generate_pkce_pair()
         params = {
             "response_type": "code",
@@ -43,17 +52,15 @@ class SchwabAuth:
             "code_challenge_method": "S256"
         }
         url = f"{self.AUTH_URL}?{urllib.parse.urlencode(params)}"
-        print("Opening browser for Schwab login...")
+        print(f"Opening browser for login at: {url}")
         webbrowser.open(url)
 
-        # Start a simple HTTP server to catch the redirect with the code
         code = self._start_http_server_for_code()
         if not code:
             raise Exception("Failed to get authorization code")
         self.exchange_code_for_token(code)
 
     def _start_http_server_for_code(self):
-        # Parse redirect_uri to get port and path
         parsed = urllib.parse.urlparse(self.redirect_uri)
         port = parsed.port or 80
         path = parsed.path
@@ -82,13 +89,11 @@ class SchwabAuth:
                 return  # Suppress logging
 
         with socketserver.TCPServer(("", port), AuthHandler) as httpd:
-            # Run server in a separate thread
             server_thread = threading.Thread(target=httpd.serve_forever)
             server_thread.daemon = True
             server_thread.start()
 
-            # Wait for code or timeout
-            for _ in range(300):  # 300 * 0.1 = 30 seconds timeout
+            for _ in range(300):  # 30 seconds timeout
                 if 'code' in code_container:
                     break
                 time.sleep(0.1)
@@ -117,7 +122,7 @@ class SchwabAuth:
         self.access_token = tokens["access_token"]
         self.refresh_token = tokens.get("refresh_token")
         expires_in = tokens.get("expires_in", 3600)
-        self.token_expires_at = time.time() + expires_in - 60  # refresh 1 min early
+        self.token_expires_at = time.time() + expires_in - 60
 
     def refresh_access_token(self):
         if not self.refresh_token:
@@ -156,7 +161,6 @@ class SchwabAuth:
         url = f"{self.API_BASE_URL}{endpoint}"
         response = requests.get(url, headers=headers, params=params)
         if response.status_code == 401:
-            # Token might be expired or invalid, try refresh once
             self.refresh_access_token()
             token = self.get_access_token()
             headers["Authorization"] = f"Bearer {token}"
@@ -164,13 +168,25 @@ class SchwabAuth:
         response.raise_for_status()
         return response.json()
 
+class SchwabAuth(OAuth2Base):
+    AUTH_URL = "https://api.schwab.com/oauth/authorize"
+    TOKEN_URL = "https://api.schwab.com/oauth/token"
+    API_BASE_URL = "https://api.schwab.com"
+
+    def __init__(self, client_id, client_secret, redirect_uri, scopes):
+        super().__init__(client_id, client_secret, redirect_uri, scopes)
+        # Additional Schwab-specific initialization if needed
+
+    # Override or add methods if Schwab requires special handling
+    # For example, account number hashing or alternative auth steps
+
 # Example usage:
 if __name__ == "__main__":
     import os
 
     CLIENT_ID = os.getenv("SCHWAB_CLIENT_ID")
     CLIENT_SECRET = os.getenv("SCHWAB_CLIENT_SECRET")
-    REDIRECT_URI = "http://localhost:21190/callback"
+    REDIRECT_URI = "https://127.0.0.1"
     SCOPES = ["read_accounts", "read_positions", "read_transactions"]
 
     if not CLIENT_ID or not CLIENT_SECRET:
