@@ -8,6 +8,13 @@ import threading
 import http.server
 import socketserver
 import time
+import tempfile
+import ipaddress
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+import datetime
 
 class OAuth2Base:
     """
@@ -28,6 +35,8 @@ class OAuth2Base:
         self.access_token = None
         self.refresh_token = None
         self.token_expires_at = 0
+        self._temp_cert_file = None
+        self._temp_key_file = None
 
     def generate_pkce_pair(self):
         code_verifier = base64.urlsafe_b64encode(os.urandom(40)).rstrip(b'=').decode('utf-8')
@@ -36,6 +45,63 @@ class OAuth2Base:
         ).rstrip(b'=').decode('utf-8')
         self.code_verifier = code_verifier
         return code_challenge
+
+    def _generate_temp_selfsigned_cert(self):
+        # Generate private key
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+        # Build certificate subject and issuer (self-signed)
+        subject = issuer = x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, u"127.0.0.1"),
+        ])
+
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.datetime.utcnow() - datetime.timedelta(days=1))
+            .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=1))
+            .add_extension(
+                x509.SubjectAlternativeName([
+                    x509.DNSName(u"localhost"),
+                    x509.IPAddress(ipaddress.IPv4Address("127.0.0.1"))
+                ]),
+                critical=False,
+            )
+            .sign(key, hashes.SHA256())
+        )
+
+        # Write key and cert to temp files
+        key_file = tempfile.NamedTemporaryFile(delete=False)
+        cert_file = tempfile.NamedTemporaryFile(delete=False)
+
+        key_file.write(
+            key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+        key_file.flush()
+
+        cert_file.write(
+            cert.public_bytes(serialization.Encoding.PEM)
+        )
+        cert_file.flush()
+
+        self._temp_cert_file = cert_file.name
+        self._temp_key_file = key_file.name
+
+    def _cleanup_temp_cert_files(self):
+        try:
+            if self._temp_cert_file and os.path.exists(self._temp_cert_file):
+                os.remove(self._temp_cert_file)
+            if self._temp_key_file and os.path.exists(self._temp_key_file):
+                os.remove(self._temp_key_file)
+        except Exception:
+            pass
 
     def start_auth_flow(self):
         """
@@ -57,10 +123,21 @@ class OAuth2Base:
 
         # Determine if HTTPS is needed based on redirect_uri scheme
         use_https = urllib.parse.urlparse(self.redirect_uri).scheme == "https"
-        certfile = "localhost.pem"  # You must generate this cert/key for localhost
-        keyfile = "localhost-key.pem"
 
-        code = self._start_http_server_for_code(use_https=use_https, certfile=certfile, keyfile=keyfile)
+        certfile = None
+        keyfile = None
+        if use_https:
+            # Generate temp cert/key files if not provided
+            self._generate_temp_selfsigned_cert()
+            certfile = self._temp_cert_file
+            keyfile = self._temp_key_file
+
+        try:
+            code = self._start_http_server_for_code(use_https=use_https, certfile=certfile, keyfile=keyfile)
+        finally:
+            if use_https:
+                self._cleanup_temp_cert_files()
+
         if not code:
             raise Exception("Failed to get authorization code")
         self.exchange_code_for_token(code)
@@ -217,7 +294,7 @@ if __name__ == "__main__":
     REDIRECT_URI = "https://127.0.0.1"
     SCOPES = ["read_accounts", "read_positions", "read_transactions"]
 
-    def test_https_server(certfile="localhost.pem", keyfile="localhost-key.pem", port=443):
+    def test_https_server(certfile=None, keyfile=None, port=443):
         import http.server
         import socketserver
         import threading
@@ -231,7 +308,56 @@ if __name__ == "__main__":
             def log_message(self, format, *args):
                 return
 
+        if certfile is None or keyfile is None:
+            # Generate temp cert/key for test
+            from cryptography import x509
+            from cryptography.x509.oid import NameOID
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import rsa
+            import datetime
+            import tempfile
+            import ipaddress
+
+            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            subject = issuer = x509.Name([
+                x509.NameAttribute(NameOID.COMMON_NAME, u"127.0.0.1"),
+            ])
+            cert = (
+                x509.CertificateBuilder()
+                .subject_name(subject)
+                .issuer_name(issuer)
+                .public_key(key.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(datetime.datetime.utcnow() - datetime.timedelta(days=1))
+                .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=1))
+                .add_extension(
+                    x509.SubjectAlternativeName([
+                        x509.DNSName(u"localhost"),
+                        x509.IPAddress(ipaddress.IPv4Address("127.0.0.1"))
+                    ]),
+                    critical=False,
+                )
+                .sign(key, hashes.SHA256())
+            )
+            key_file = tempfile.NamedTemporaryFile(delete=False)
+            cert_file = tempfile.NamedTemporaryFile(delete=False)
+            key_file.write(
+                key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.TraditionalOpenSSL,
+                    encryption_algorithm=serialization.NoEncryption(),
+                )
+            )
+            key_file.flush()
+            cert_file.write(
+                cert.public_bytes(serialization.Encoding.PEM)
+            )
+            cert_file.flush()
+            certfile = cert_file.name
+            keyfile = key_file.name
+
         with socketserver.TCPServer(("", port), SimpleHandler) as httpd:
+            import ssl
             httpd.socket = ssl.wrap_socket(httpd.socket,
                                            server_side=True,
                                            certfile=certfile,
@@ -255,6 +381,19 @@ if __name__ == "__main__":
                 return False
 
             httpd.shutdown()
+
+            # Clean up temp files if generated
+            if certfile and certfile.startswith(tempfile.gettempdir()):
+                try:
+                    os.remove(certfile)
+                except Exception:
+                    pass
+            if keyfile and keyfile.startswith(tempfile.gettempdir()):
+                try:
+                    os.remove(keyfile)
+                except Exception:
+                    pass
+
             return True
 
     if "-c" in sys.argv:
