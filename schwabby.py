@@ -16,6 +16,53 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 import datetime
 
+def generate_temp_key_cert():
+    # Generate private key
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    # Build certificate subject and issuer (self-signed)
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, u"127.0.0.1"),
+    ])
+
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime.utcnow() - datetime.timedelta(days=1))
+        .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName([
+                x509.DNSName(u"localhost"),
+                x509.IPAddress(ipaddress.IPv4Address("127.0.0.1"))
+            ]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+
+    # Write key and cert to temp files
+    key_file = tempfile.NamedTemporaryFile(delete=False)
+    cert_file = tempfile.NamedTemporaryFile(delete=False)
+
+    key_file.write(
+        key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+    )
+    key_file.flush()
+
+    cert_file.write(
+        cert.public_bytes(serialization.Encoding.PEM)
+    )
+    cert_file.flush()
+
+    return key_file.name, cert_file.name
+
 class OAuth2Base:
     """
     Abstract base class for OAuth2 authentication flows.
@@ -74,25 +121,10 @@ class OAuth2Base:
         )
 
         # Write key and cert to temp files
-        key_file = tempfile.NamedTemporaryFile(delete=False)
-        cert_file = tempfile.NamedTemporaryFile(delete=False)
+        key_file, cert_file = generate_temp_key_cert()
 
-        key_file.write(
-            key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.TraditionalOpenSSL,
-                encryption_algorithm=serialization.NoEncryption(),
-            )
-        )
-        key_file.flush()
-
-        cert_file.write(
-            cert.public_bytes(serialization.Encoding.PEM)
-        )
-        cert_file.flush()
-
-        self._temp_cert_file = cert_file.name
-        self._temp_key_file = key_file.name
+        self._temp_key_file = key_file
+        self._temp_cert_file = cert_file
 
     def _cleanup_temp_cert_files(self):
         try:
@@ -310,51 +342,7 @@ if __name__ == "__main__":
 
         if certfile is None or keyfile is None:
             # Generate temp cert/key for test
-            from cryptography import x509
-            from cryptography.x509.oid import NameOID
-            from cryptography.hazmat.primitives import hashes, serialization
-            from cryptography.hazmat.primitives.asymmetric import rsa
-            import datetime
-            import tempfile
-            import ipaddress
-
-            key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-            subject = issuer = x509.Name([
-                x509.NameAttribute(NameOID.COMMON_NAME, u"127.0.0.1"),
-            ])
-            cert = (
-                x509.CertificateBuilder()
-                .subject_name(subject)
-                .issuer_name(issuer)
-                .public_key(key.public_key())
-                .serial_number(x509.random_serial_number())
-                .not_valid_before(datetime.datetime.utcnow() - datetime.timedelta(days=1))
-                .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=1))
-                .add_extension(
-                    x509.SubjectAlternativeName([
-                        x509.DNSName(u"localhost"),
-                        x509.IPAddress(ipaddress.IPv4Address("127.0.0.1"))
-                    ]),
-                    critical=False,
-                )
-                .sign(key, hashes.SHA256())
-            )
-            key_file = tempfile.NamedTemporaryFile(delete=False)
-            cert_file = tempfile.NamedTemporaryFile(delete=False)
-            key_file.write(
-                key.private_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PrivateFormat.TraditionalOpenSSL,
-                    encryption_algorithm=serialization.NoEncryption(),
-                )
-            )
-            key_file.flush()
-            cert_file.write(
-                cert.public_bytes(serialization.Encoding.PEM)
-            )
-            cert_file.flush()
-            certfile = cert_file.name
-            keyfile = key_file.name
+            certfile, keyfile = generate_temp_key_cert()
 
         with socketserver.TCPServer(("", port), SimpleHandler) as httpd:
             import ssl
