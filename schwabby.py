@@ -166,11 +166,15 @@ class SchwabAuth:
 
 # Example usage:
 if __name__ == "__main__":
-    # Replace these with your actual Schwab app credentials and redirect URI
-    CLIENT_ID = "YOUR_CLIENT_ID"
-    CLIENT_SECRET = "YOUR_CLIENT_SECRET"
-    REDIRECT_URI = "http://localhost:8080/callback"
+    import os
+
+    CLIENT_ID = os.getenv("SCHWAB_CLIENT_ID")
+    CLIENT_SECRET = os.getenv("SCHWAB_CLIENT_SECRET")
+    REDIRECT_URI = "http://localhost:21190/callback"
     SCOPES = ["read_accounts", "read_positions", "read_transactions"]
+
+    if not CLIENT_ID or not CLIENT_SECRET:
+        raise Exception("Environment variables SCHWAB_CLIENT_ID and SCHWAB_CLIENT_SECRET must be set")
 
     auth = SchwabAuth(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, SCOPES)
     auth.start_auth_flow()
