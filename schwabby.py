@@ -55,14 +55,19 @@ class OAuth2Base:
         print(f"Opening browser for login at: {url}")
         webbrowser.open(url)
 
-        code = self._start_http_server_for_code()
+        # Determine if HTTPS is needed based on redirect_uri scheme
+        use_https = urllib.parse.urlparse(self.redirect_uri).scheme == "https"
+        certfile = "localhost.pem"  # You must generate this cert/key for localhost
+        keyfile = "localhost-key.pem"
+
+        code = self._start_http_server_for_code(use_https=use_https, certfile=certfile, keyfile=keyfile)
         if not code:
             raise Exception("Failed to get authorization code")
         self.exchange_code_for_token(code)
 
-    def _start_http_server_for_code(self):
+    def _start_http_server_for_code(self, use_https=False, certfile=None, keyfile=None):
         parsed = urllib.parse.urlparse(self.redirect_uri)
-        port = parsed.port or 80
+        port = parsed.port or (443 if use_https else 80)
         path = parsed.path
 
         code_container = {}
@@ -88,18 +93,38 @@ class OAuth2Base:
             def log_message(self, format, *args):
                 return  # Suppress logging
 
-        with socketserver.TCPServer(("", port), AuthHandler) as httpd:
-            server_thread = threading.Thread(target=httpd.serve_forever)
-            server_thread.daemon = True
-            server_thread.start()
+        if use_https:
+            import ssl
+            with socketserver.TCPServer(("", port), AuthHandler) as httpd:
+                httpd.socket = ssl.wrap_socket(httpd.socket,
+                                               server_side=True,
+                                               certfile=certfile,
+                                               keyfile=keyfile,
+                                               ssl_version=ssl.PROTOCOL_TLS)
+                server_thread = threading.Thread(target=httpd.serve_forever)
+                server_thread.daemon = True
+                server_thread.start()
 
-            for _ in range(300):  # 30 seconds timeout
-                if 'code' in code_container:
-                    break
-                time.sleep(0.1)
+                for _ in range(300):  # 30 seconds timeout
+                    if 'code' in code_container:
+                        break
+                    time.sleep(0.1)
 
-            httpd.shutdown()
-            return code_container.get('code')
+                httpd.shutdown()
+                return code_container.get('code')
+        else:
+            with socketserver.TCPServer(("", port), AuthHandler) as httpd:
+                server_thread = threading.Thread(target=httpd.serve_forever)
+                server_thread.daemon = True
+                server_thread.start()
+
+                for _ in range(300):  # 30 seconds timeout
+                    if 'code' in code_container:
+                        break
+                    time.sleep(0.1)
+
+                httpd.shutdown()
+                return code_container.get('code')
 
     def exchange_code_for_token(self, code):
         auth_str = f"{self.client_id}:{self.client_secret}"
@@ -183,11 +208,62 @@ class SchwabAuth(OAuth2Base):
 # Example usage:
 if __name__ == "__main__":
     import os
+    import sys
+    import ssl
+    import socket
 
     CLIENT_ID = os.getenv("SCHWAB_CLIENT_ID")
     CLIENT_SECRET = os.getenv("SCHWAB_CLIENT_SECRET")
     REDIRECT_URI = "https://127.0.0.1"
     SCOPES = ["read_accounts", "read_positions", "read_transactions"]
+
+    def test_https_server(certfile="localhost.pem", keyfile="localhost-key.pem", port=443):
+        import http.server
+        import socketserver
+        import threading
+
+        class SimpleHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"HTTPS server is working")
+
+            def log_message(self, format, *args):
+                return
+
+        with socketserver.TCPServer(("", port), SimpleHandler) as httpd:
+            httpd.socket = ssl.wrap_socket(httpd.socket,
+                                           server_side=True,
+                                           certfile=certfile,
+                                           keyfile=keyfile,
+                                           ssl_version=ssl.PROTOCOL_TLS)
+            print(f"Serving HTTPS on port {port} with cert {certfile} and key {keyfile}")
+            server_thread = threading.Thread(target=httpd.serve_forever)
+            server_thread.daemon = True
+            server_thread.start()
+
+            try:
+                # Test connection to server
+                context = ssl.create_default_context()
+                with socket.create_connection(("127.0.0.1", port)) as sock:
+                    with context.wrap_socket(sock, server_hostname="127.0.0.1") as ssock:
+                        ssock.sendall(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                        data = ssock.recv(1024)
+                        print("Received from server:", data.decode())
+            except Exception as e:
+                print("HTTPS server test failed:", e)
+                return False
+
+            httpd.shutdown()
+            return True
+
+    if "-c" in sys.argv:
+        success = test_https_server()
+        if success:
+            print("HTTPS server test succeeded")
+        else:
+            print("HTTPS server test failed")
+        sys.exit(0)
 
     if not CLIENT_ID or not CLIENT_SECRET:
         raise Exception("Environment variables SCHWAB_CLIENT_ID and SCHWAB_CLIENT_SECRET must be set")
