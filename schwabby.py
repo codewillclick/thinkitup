@@ -302,6 +302,7 @@ if __name__ == "__main__":
         import http.server
         import socketserver
         import threading
+        import ssl
 
         class SimpleHandler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
@@ -314,15 +315,13 @@ if __name__ == "__main__":
 
         if certfile is None or keyfile is None:
             # Generate temp cert/key for test
-            certfile, keyfile = generate_temp_key_cert()
+            keyfile, certfile = generate_temp_key_cert()
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=certfile, keyfile=keyfile)
 
         with socketserver.TCPServer(("", port), SimpleHandler) as httpd:
-            import ssl
-            httpd.socket = ssl.wrap_socket(httpd.socket,
-                                           server_side=True,
-                                           certfile=certfile,
-                                           keyfile=keyfile,
-                                           ssl_version=ssl.PROTOCOL_TLS)
+            httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
             print(f"Serving HTTPS on port {port} with cert {certfile} and key {keyfile}")
             server_thread = threading.Thread(target=httpd.serve_forever)
             server_thread.daemon = True
@@ -330,9 +329,9 @@ if __name__ == "__main__":
 
             try:
                 # Test connection to server
-                context = ssl._create_unverified_context()
+                client_context = ssl._create_unverified_context()
                 with socket.create_connection(("127.0.0.1", port)) as sock:
-                    with context.wrap_socket(sock, server_hostname="127.0.0.1") as ssock:
+                    with client_context.wrap_socket(sock, server_hostname="127.0.0.1") as ssock:
                         ssock.sendall(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
                         data = ssock.recv(1024)
                         print("Received from server:", data.decode())
