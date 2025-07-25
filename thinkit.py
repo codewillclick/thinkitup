@@ -110,7 +110,7 @@ def process(src,imported=None,macros=None,show=False,importing=False,noplot=Fals
 				except StopIteration:
 					print(f'ERROR: broke macro definition ({macro}) with EOF',file=sys.stderr)
 				continue
-			
+
 			# TODO: Run macro replacement lines through process() as well, so we can have
 			#   macros inside of macros inside of macros inside of...
 			# TODO: Make macros string-replacements, rather than line-replacements.
@@ -123,6 +123,9 @@ def process(src,imported=None,macros=None,show=False,importing=False,noplot=Fals
 				yield macros[macro] % {str(i):s for s,i in zip(pr,range(len(pr)))}
 				continue
 			
+			# TODO: I don't think true if blocks are being processed...
+			#   Make an iter() def or class that lets you put() lines back at the front
+			#   while maintianing the order they're put in.
 			# if @if... @@, comment all that junk out
 			m = x_if.search(line)
 			if m:
