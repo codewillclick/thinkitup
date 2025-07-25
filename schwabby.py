@@ -94,35 +94,7 @@ class OAuth2Base:
         return code_challenge
 
     def _generate_temp_selfsigned_cert(self):
-        # Generate private key
-        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-
-        # Build certificate subject and issuer (self-signed)
-        subject = issuer = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, u"127.0.0.1"),
-        ])
-
-        cert = (
-            x509.CertificateBuilder()
-            .subject_name(subject)
-            .issuer_name(issuer)
-            .public_key(key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(datetime.datetime.utcnow() - datetime.timedelta(days=1))
-            .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=1))
-            .add_extension(
-                x509.SubjectAlternativeName([
-                    x509.DNSName(u"localhost"),
-                    x509.IPAddress(ipaddress.IPv4Address("127.0.0.1"))
-                ]),
-                critical=False,
-            )
-            .sign(key, hashes.SHA256())
-        )
-
-        # Write key and cert to temp files
         key_file, cert_file = generate_temp_key_cert()
-
         self._temp_key_file = key_file
         self._temp_cert_file = cert_file
 
