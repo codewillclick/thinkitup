@@ -370,7 +370,7 @@ if __name__ == "__main__":
 
             try:
                 # Test connection to server
-                context = ssl.create_default_context()
+                context = ssl._create_unverified_context()
                 with socket.create_connection(("127.0.0.1", port)) as sock:
                     with context.wrap_socket(sock, server_hostname="127.0.0.1") as ssock:
                         ssock.sendall(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
